@@ -1,0 +1,10 @@
+﻿# Binary
+trading-journal-bot.exe
+trading-journal-bot
+
+# Environment / secrets
+.env
+*.env
+
+# Go
+vendor/
