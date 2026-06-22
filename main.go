@@ -54,8 +54,11 @@ type UserSession struct {
 var (
 	sessions   = make(map[int64]*UserSession)
 	sessionsMu sync.Mutex
-	tradesFile = "trades.json"
 )
+
+func tradesFile(userID int64) string {
+	return fmt.Sprintf("trades_%d.json", userID)
+}
 
 func getSession(userID int64) *UserSession {
 	sessionsMu.Lock()
@@ -68,8 +71,8 @@ func getSession(userID int64) *UserSession {
 
 // --- Storage ---
 
-func loadTrades() ([]Trade, error) {
-	data, err := os.ReadFile(tradesFile)
+func loadTrades(userID int64) ([]Trade, error) {
+	data, err := os.ReadFile(tradesFile(userID))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []Trade{}, nil
@@ -80,35 +83,35 @@ func loadTrades() ([]Trade, error) {
 	return trades, json.Unmarshal(data, &trades)
 }
 
-func persistTrades(trades []Trade) error {
+func persistTrades(userID int64, trades []Trade) error {
 	out, _ := json.MarshalIndent(trades, "", "  ")
-	return os.WriteFile(tradesFile, out, 0644)
+	return os.WriteFile(tradesFile(userID), out, 0644)
 }
 
-func addTrade(t Trade) error {
-	trades, err := loadTrades()
+func addTrade(userID int64, t Trade) error {
+	trades, err := loadTrades(userID)
 	if err != nil {
 		return err
 	}
-	return persistTrades(append(trades, t))
+	return persistTrades(userID, append(trades, t))
 }
 
-func updateTrade(t Trade) error {
-	trades, err := loadTrades()
+func updateTrade(userID int64, t Trade) error {
+	trades, err := loadTrades(userID)
 	if err != nil {
 		return err
 	}
 	for i, tr := range trades {
 		if tr.ID == t.ID {
 			trades[i] = t
-			return persistTrades(trades)
+			return persistTrades(userID, trades)
 		}
 	}
 	return fmt.Errorf("trade not found")
 }
 
-func deleteTrade(id string) error {
-	trades, err := loadTrades()
+func deleteTrade(userID int64, id string) error {
+	trades, err := loadTrades(userID)
 	if err != nil {
 		return err
 	}
@@ -118,9 +121,8 @@ func deleteTrade(id string) error {
 			updated = append(updated, t)
 		}
 	}
-	return persistTrades(updated)
+	return persistTrades(userID, updated)
 }
-
 func genID() string {
 	return strconv.FormatInt(time.Now().UnixNano(), 36)
 }
@@ -182,11 +184,11 @@ func main() {
 		var saveErr error
 		if sess.EditingID != "" {
 			sess.Trade.ID = sess.EditingID
-			saveErr = updateTrade(sess.Trade)
+			saveErr = updateTrade(c.Sender().ID, sess.Trade)
 			sess.EditingID = ""
 		} else {
 			sess.Trade.ID = genID()
-			saveErr = addTrade(sess.Trade)
+			saveErr = addTrade(c.Sender().ID, sess.Trade)
 		}
 		if saveErr != nil {
 			return c.Send("❌ Failed to save trade. Please try again.")
@@ -200,7 +202,7 @@ func main() {
 	// --- Helper: show journal list ---
 
 	showJournal := func(c tele.Context) error {
-		trades, err := loadTrades()
+		trades, err := loadTrades(c.Sender().ID)
 		if err != nil || len(trades) == 0 {
 			msg := "📒 *My Journal*\n\nNo trades yet. Add your first trade!"
 			if c.Callback() != nil {
@@ -317,7 +319,7 @@ func main() {
 		switch action {
 
 		case "view":
-			trades, _ := loadTrades()
+			trades, _ := loadTrades(c.Sender().ID)
 			for _, t := range trades {
 				if t.ID == id {
 					menu := &tele.ReplyMarkup{}
@@ -335,7 +337,7 @@ func main() {
 			return c.Respond(&tele.CallbackResponse{Text: "⚠️ Trade not found."})
 
 		case "edit":
-			trades, _ := loadTrades()
+			trades, _ := loadTrades(c.Sender().ID)
 			for _, t := range trades {
 				if t.ID == id {
 					sess := getSession(c.Sender().ID)
@@ -360,7 +362,7 @@ func main() {
 			return c.Send("🗑 Are you sure you want to delete this trade?", &tele.SendOptions{ReplyMarkup: menu})
 
 		case "confirm_delete":
-			if err := deleteTrade(id); err != nil {
+			if err := deleteTrade(c.Sender().ID, id); err != nil {
 				return c.Respond(&tele.CallbackResponse{Text: "❌ Failed to delete."})
 			}
 			c.Respond()
