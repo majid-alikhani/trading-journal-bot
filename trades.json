@@ -1,0 +1,50 @@
+[
+  {
+    "id": "",
+    "pair": "xauusd",
+    "direction": "Buy",
+    "entry": "4190.15",
+    "sl": "4185",
+    "tp": "4200",
+    "result": "Win",
+    "confirmation": "",
+    "notes": "چون به ناحیه حمایتی رسید",
+    "date": "2026-06-22 14:14"
+  },
+  {
+    "id": "djfirrnewlx8",
+    "pair": "xauusd",
+    "direction": "Buy",
+    "entry": "4190",
+    "sl": "4185",
+    "tp": "4205",
+    "result": "Win",
+    "confirmation": "",
+    "notes": "ناحیه حمایتی",
+    "date": "2026-06-22 14:21"
+  },
+  {
+    "id": "djfisgq6d3u8",
+    "pair": "eurusd",
+    "direction": "Buy",
+    "entry": "1.1645",
+    "sl": "1.1610",
+    "tp": "1.1680",
+    "result": "Loss",
+    "confirmation": "",
+    "notes": "-",
+    "date": "2026-06-22 14:22"
+  },
+  {
+    "id": "djfj1tz1shto",
+    "pair": "btcusdt",
+    "direction": "Buy",
+    "entry": "60000",
+    "sl": "55000",
+    "tp": "70000",
+    "result": "Win",
+    "confirmation": "support area",
+    "notes": "should wait to touch my order",
+    "date": "2026-06-21 15:15"
+  }
+]
