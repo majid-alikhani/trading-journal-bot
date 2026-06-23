@@ -132,8 +132,8 @@ func main() {
 
 	mainMenu := &tele.ReplyMarkup{}
 	btnMyJournal := mainMenu.Data("📒 My Journal", "my_journal")
-	btnAddTrade  := mainMenu.Data("➕ Add a Trade", "add_trade")
-	btnWeakness  := mainMenu.Data("⚠️ My Weakness", "my_weakness")
+	btnAddTrade := mainMenu.Data("➕ Add a Trade", "add_trade")
+	btnWeakness := mainMenu.Data("⚠️ My Weakness", "my_weakness")
 	btnAdvantage := mainMenu.Data("✅ My Advantage", "my_advantage")
 	mainMenu.Inline(
 		mainMenu.Row(btnMyJournal, btnAddTrade),
@@ -141,14 +141,14 @@ func main() {
 	)
 
 	dirMenu := &tele.ReplyMarkup{}
-	btnBuy  := dirMenu.Data("📈 Buy", "dir_buy")
+	btnBuy := dirMenu.Data("📈 Buy", "dir_buy")
 	btnSell := dirMenu.Data("📉 Sell", "dir_sell")
 	dirMenu.Inline(dirMenu.Row(btnBuy, btnSell))
 
 	resultMenu := &tele.ReplyMarkup{}
-	btnWin  := resultMenu.Data("✅ Win", "result_win")
+	btnWin := resultMenu.Data("✅ Win", "result_win")
 	btnLoss := resultMenu.Data("❌ Loss", "result_loss")
-	btnBE   := resultMenu.Data("➖ Breakeven", "result_be")
+	btnBE := resultMenu.Data("➖ Breakeven", "result_be")
 	resultMenu.Inline(resultMenu.Row(btnWin, btnLoss, btnBE))
 
 	skipMenu := &tele.ReplyMarkup{}
@@ -308,9 +308,9 @@ func main() {
 				return c.Respond(&tele.CallbackResponse{Text: "⚠️ Trade not found."})
 			}
 			menu := &tele.ReplyMarkup{}
-			editBtn   := menu.Data("✏️ Edit", "edit:"+idStr)
+			editBtn := menu.Data("✏️ Edit", "edit:"+idStr)
 			deleteBtn := menu.Data("🗑 Delete", "delete:"+idStr)
-			backBtn   := menu.Data("🔙 Journal", "back_journal")
+			backBtn := menu.Data("🔙 Journal", "back_journal")
 			menu.Inline(menu.Row(editBtn, deleteBtn), menu.Row(backBtn))
 			c.Respond()
 			return c.Send(
@@ -338,7 +338,7 @@ func main() {
 		case "delete":
 			menu := &tele.ReplyMarkup{}
 			confirmBtn := menu.Data("✅ Yes, delete", "confirm_delete:"+idStr)
-			cancelBtn  := menu.Data("❌ Cancel", "view:"+idStr)
+			cancelBtn := menu.Data("❌ Cancel", "view:"+idStr)
 			menu.Inline(menu.Row(confirmBtn, cancelBtn))
 			c.Respond()
 			return c.Send("🗑 Are you sure you want to delete this trade?", &tele.SendOptions{ReplyMarkup: menu})
@@ -421,7 +421,97 @@ func main() {
 	// --- Placeholders ---
 
 	bot.Handle(&btnWeakness, func(c tele.Context) error {
-		return c.Respond(&tele.CallbackResponse{Text: "⚠️ My Weakness — coming soon!"})
+		c.Respond()
+		trades, err := loadTrades(c.Sender().ID)
+		if err != nil || len(trades) == 0 {
+			return c.Send("⚠️ *My Weakness*\n\nNo trades yet. Add some trades first!", &tele.SendOptions{ParseMode: tele.ModeMarkdown})
+		}
+
+		// --- Count trades per symbol ---
+		pairCount := make(map[string]int)
+		pairWins := make(map[string]int)
+		buyTotal, buyWins := 0, 0
+		sellTotal, sellWins := 0, 0
+
+		for _, t := range trades {
+			pairCount[t.Pair]++
+			if t.Result == "Win" {
+				pairWins[t.Pair]++
+			}
+			if t.Direction == "Buy" {
+				buyTotal++
+				if t.Result == "Win" {
+					buyWins++
+				}
+			} else if t.Direction == "Sell" {
+				sellTotal++
+				if t.Result == "Win" {
+					sellWins++
+				}
+			}
+		}
+
+		// --- Most traded symbol ---
+		mostTradedPair := ""
+		mostTradedCount := 0
+		for pair, count := range pairCount {
+			if count > mostTradedCount {
+				mostTradedCount = count
+				mostTradedPair = pair
+			}
+		}
+
+		// --- Most winning symbol ---
+		mostWinningPair := ""
+		mostWinningCount := 0
+		for pair, wins := range pairWins {
+			if wins > mostWinningCount {
+				mostWinningCount = wins
+				mostWinningPair = pair
+			}
+		}
+
+		// --- Buy vs Sell win rate ---
+		buyWinRate := 0.0
+		sellWinRate := 0.0
+		if buyTotal > 0 {
+			buyWinRate = float64(buyWins) / float64(buyTotal) * 100
+		}
+		if sellTotal > 0 {
+			sellWinRate = float64(sellWins) / float64(sellTotal) * 100
+		}
+
+		directionLine := ""
+		switch {
+		case buyWinRate > sellWinRate:
+			directionLine = fmt.Sprintf("📈 You perform better on *Buy* trades (%.0f%% win rate vs %.0f%% on Sells). Consider being more selective with Sell setups.", buyWinRate, sellWinRate)
+		case sellWinRate > buyWinRate:
+			directionLine = fmt.Sprintf("📉 You perform better on *Sell* trades (%.0f%% win rate vs %.0f%% on Buys). Consider being more selective with Buy setups.", sellWinRate, buyWinRate)
+		default:
+			directionLine = fmt.Sprintf("⚖️ Your Buy and Sell win rates are equal (%.0f%%). Balanced performance across both directions.", buyWinRate)
+		}
+
+		winRateLine := ""
+		if mostWinningPair == "" {
+			winRateLine = "You have no winning trades yet."
+		} else {
+			total := pairCount[mostWinningPair]
+			winRateLine = fmt.Sprintf("🏆 Your best performing symbol is *%s* with %d win(s) out of %d trade(s).", mostWinningPair, mostWinningCount, total)
+		}
+
+		report := fmt.Sprintf(
+			"⚠️ *My Weakness Report*\n\n"+
+				"📊 You trade *%s* the most (%d trades). Ask yourself: is this your strongest setup, or a habit?\n\n"+
+				"%s\n\n"+
+				"%s\n\n"+
+				"📝 Total trades analyzed: *%d*",
+			mostTradedPair, mostTradedCount,
+			winRateLine,
+			directionLine,
+			len(trades),
+		)
+
+		return c.Send(report, &tele.SendOptions{ParseMode: tele.ModeMarkdown, ReplyMarkup: mainMenu})
 	})
 	bot.Handle(&btnAdvantage, func(c tele.Context) error {
 		return c.Respond(&tele.CallbackResponse{Text: "✅ My Advantage — coming soon!"})
