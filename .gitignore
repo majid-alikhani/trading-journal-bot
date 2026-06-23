@@ -8,3 +8,4 @@ trading-journal-bot
 
 # Go
 vendor/
+journal.db

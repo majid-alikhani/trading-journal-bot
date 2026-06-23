@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -11,21 +10,58 @@ import (
 	"time"
 
 	tele "gopkg.in/telebot.v3"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 // --- Trade model ---
 
 type Trade struct {
-	ID           string `json:"id"`
-	Pair         string `json:"pair"`
-	Direction    string `json:"direction"`
-	Entry        string `json:"entry"`
-	SL           string `json:"sl"`
-	TP           string `json:"tp"`
-	Result       string `json:"result"`
-	Confirmation string `json:"confirmation"`
-	Notes        string `json:"notes"`
-	Date         string `json:"date"`
+	ID           uint   `gorm:"primaryKey;autoIncrement"`
+	UserID       int64  `gorm:"index;not null"`
+	Pair         string `gorm:"not null"`
+	Direction    string `gorm:"not null"`
+	Entry        string `gorm:"not null"`
+	SL           string `gorm:"not null"`
+	TP           string `gorm:"not null"`
+	Date         string `gorm:"not null"`
+	Result       string `gorm:"not null"`
+	Confirmation string
+	Notes        string
+}
+
+// --- Database ---
+
+var db *gorm.DB
+
+func initDB() {
+	var err error
+	db, err = gorm.Open(sqlite.Open("journal.db"), &gorm.Config{})
+	if err != nil {
+		log.Fatal("failed to connect to database:", err)
+	}
+	db.AutoMigrate(&Trade{})
+	log.Println("Database ready.")
+}
+
+// --- Storage ---
+
+func loadTrades(userID int64) ([]Trade, error) {
+	var trades []Trade
+	result := db.Where("user_id = ?", userID).Order("id desc").Find(&trades)
+	return trades, result.Error
+}
+
+func addTrade(t Trade) error {
+	return db.Create(&t).Error
+}
+
+func updateTrade(t Trade) error {
+	return db.Where("id = ? AND user_id = ?", t.ID, t.UserID).Save(&t).Error
+}
+
+func deleteTrade(userID int64, id uint) error {
+	return db.Where("id = ? AND user_id = ?", id, userID).Delete(&Trade{}).Error
 }
 
 // --- State machine ---
@@ -48,17 +84,13 @@ const (
 type UserSession struct {
 	State     TradeState
 	Trade     Trade
-	EditingID string // non-empty when editing an existing trade
+	EditingID uint
 }
 
 var (
 	sessions   = make(map[int64]*UserSession)
 	sessionsMu sync.Mutex
 )
-
-func tradesFile(userID int64) string {
-	return fmt.Sprintf("trades_%d.json", userID)
-}
 
 func getSession(userID int64) *UserSession {
 	sessionsMu.Lock()
@@ -69,74 +101,20 @@ func getSession(userID int64) *UserSession {
 	return sessions[userID]
 }
 
-// --- Storage ---
-
-func loadTrades(userID int64) ([]Trade, error) {
-	data, err := os.ReadFile(tradesFile(userID))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []Trade{}, nil
-		}
-		return nil, err
-	}
-	var trades []Trade
-	return trades, json.Unmarshal(data, &trades)
-}
-
-func persistTrades(userID int64, trades []Trade) error {
-	out, _ := json.MarshalIndent(trades, "", "  ")
-	return os.WriteFile(tradesFile(userID), out, 0644)
-}
-
-func addTrade(userID int64, t Trade) error {
-	trades, err := loadTrades(userID)
-	if err != nil {
-		return err
-	}
-	return persistTrades(userID, append(trades, t))
-}
-
-func updateTrade(userID int64, t Trade) error {
-	trades, err := loadTrades(userID)
-	if err != nil {
-		return err
-	}
-	for i, tr := range trades {
-		if tr.ID == t.ID {
-			trades[i] = t
-			return persistTrades(userID, trades)
-		}
-	}
-	return fmt.Errorf("trade not found")
-}
-
-func deleteTrade(userID int64, id string) error {
-	trades, err := loadTrades(userID)
-	if err != nil {
-		return err
-	}
-	var updated []Trade
-	for _, t := range trades {
-		if t.ID != id {
-			updated = append(updated, t)
-		}
-	}
-	return persistTrades(userID, updated)
-}
-func genID() string {
-	return strconv.FormatInt(time.Now().UnixNano(), 36)
-}
+// --- Helpers ---
 
 func tradeDetail(t Trade) string {
 	return fmt.Sprintf(
-		"📊 Pair: *%s*\n📈 Direction: *%s*\n💰 Entry: *%s*\n🛑 SL: *%s*\n🎯 TP: *%s*\n🏆 Result: *%s*\n🤔 Confirmation: %s\n📝 Notes: %s\n🕐 Date: %s",
-		t.Pair, t.Direction, t.Entry, t.SL, t.TP, t.Result, t.Confirmation, t.Notes, t.Date,
+		"📊 Pair: *%s*\n📈 Direction: *%s*\n💰 Entry: *%s*\n🛑 SL: *%s*\n🎯 TP: *%s*\n🕐 Date: *%s*\n🏆 Result: *%s*\n🤔 Confirmation: %s\n📝 Notes: %s",
+		t.Pair, t.Direction, t.Entry, t.SL, t.TP, t.Date, t.Result, t.Confirmation, t.Notes,
 	)
 }
 
 // --- Main ---
 
 func main() {
+	initDB()
+
 	token := os.Getenv("TELEGRAM_TOKEN")
 	if token == "" {
 		log.Fatal("TELEGRAM_TOKEN is not set")
@@ -154,8 +132,8 @@ func main() {
 
 	mainMenu := &tele.ReplyMarkup{}
 	btnMyJournal := mainMenu.Data("📒 My Journal", "my_journal")
-	btnAddTrade := mainMenu.Data("➕ Add a Trade", "add_trade")
-	btnWeakness := mainMenu.Data("⚠️ My Weakness", "my_weakness")
+	btnAddTrade  := mainMenu.Data("➕ Add a Trade", "add_trade")
+	btnWeakness  := mainMenu.Data("⚠️ My Weakness", "my_weakness")
 	btnAdvantage := mainMenu.Data("✅ My Advantage", "my_advantage")
 	mainMenu.Inline(
 		mainMenu.Row(btnMyJournal, btnAddTrade),
@@ -163,14 +141,14 @@ func main() {
 	)
 
 	dirMenu := &tele.ReplyMarkup{}
-	btnBuy := dirMenu.Data("📈 Buy", "dir_buy")
+	btnBuy  := dirMenu.Data("📈 Buy", "dir_buy")
 	btnSell := dirMenu.Data("📉 Sell", "dir_sell")
 	dirMenu.Inline(dirMenu.Row(btnBuy, btnSell))
 
 	resultMenu := &tele.ReplyMarkup{}
-	btnWin := resultMenu.Data("✅ Win", "result_win")
+	btnWin  := resultMenu.Data("✅ Win", "result_win")
 	btnLoss := resultMenu.Data("❌ Loss", "result_loss")
-	btnBE := resultMenu.Data("➖ Breakeven", "result_be")
+	btnBE   := resultMenu.Data("➖ Breakeven", "result_be")
 	resultMenu.Inline(resultMenu.Row(btnWin, btnLoss, btnBE))
 
 	skipMenu := &tele.ReplyMarkup{}
@@ -182,13 +160,14 @@ func main() {
 	finishTrade := func(c tele.Context, sess *UserSession) error {
 		sess.State = StateIdle
 		var saveErr error
-		if sess.EditingID != "" {
+		if sess.EditingID != 0 {
 			sess.Trade.ID = sess.EditingID
-			saveErr = updateTrade(c.Sender().ID, sess.Trade)
-			sess.EditingID = ""
+			sess.Trade.UserID = c.Sender().ID
+			saveErr = updateTrade(sess.Trade)
+			sess.EditingID = 0
 		} else {
-			sess.Trade.ID = genID()
-			saveErr = addTrade(c.Sender().ID, sess.Trade)
+			sess.Trade.UserID = c.Sender().ID
+			saveErr = addTrade(sess.Trade)
 		}
 		if saveErr != nil {
 			return c.Send("❌ Failed to save trade. Please try again.")
@@ -204,23 +183,27 @@ func main() {
 	showJournal := func(c tele.Context) error {
 		trades, err := loadTrades(c.Sender().ID)
 		if err != nil || len(trades) == 0 {
-			msg := "📒 *My Journal*\n\nNo trades yet. Add your first trade!"
 			if c.Callback() != nil {
 				c.Respond()
 			}
-			return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeMarkdown, ReplyMarkup: mainMenu})
+			return c.Send(
+				"📒 *My Journal*\n\nNo trades yet. Add your first trade!",
+				&tele.SendOptions{ParseMode: tele.ModeMarkdown, ReplyMarkup: mainMenu},
+			)
 		}
 		menu := &tele.ReplyMarkup{}
 		var rows []tele.Row
-		// newest first, max 10
-		for i := len(trades) - 1; i >= 0 && i >= len(trades)-10; i-- {
+		limit := 10
+		if len(trades) < limit {
+			limit = len(trades)
+		}
+		for i := 0; i < limit; i++ {
 			t := trades[i]
 			label := fmt.Sprintf("%s | %s %s | %s", t.Date, t.Pair, t.Direction, t.Result)
-			btn := menu.Data(label, "view:"+t.ID)
+			btn := menu.Data(label, "view:"+strconv.Itoa(int(t.ID)))
 			rows = append(rows, menu.Row(btn))
 		}
-		backBtn := menu.Data("🔙 Back", "back_main")
-		rows = append(rows, menu.Row(backBtn))
+		rows = append(rows, menu.Row(menu.Data("🔙 Back", "back_main")))
 		menu.Inline(rows...)
 		if c.Callback() != nil {
 			c.Respond()
@@ -243,7 +226,7 @@ func main() {
 		sess := getSession(c.Sender().ID)
 		sess.State = StateWaitingPair
 		sess.Trade = Trade{}
-		sess.EditingID = ""
+		sess.EditingID = 0
 		c.Respond()
 		return c.Send(
 			"➕ *Add a Trade*\n\n📊 *Step 1/9 — Pair*\n\nWhich pair did you trade?\n_(e.g. XAUUSD, EURUSD, GBPUSD)_",
@@ -280,7 +263,7 @@ func main() {
 		sess.State = StateWaitingConfirmation
 		c.Respond()
 		return c.Send(
-			fmt.Sprintf("%s Result: *%s*\n\n🤔 *Step 7/9 — Confirmation*\n\nWhy did you take this trade?", emoji, result),
+			fmt.Sprintf("%s Result: *%s*\n\n🤔 *Step 8/9 — Confirmation*\n\nWhy did you take this trade?", emoji, result),
 			&tele.SendOptions{ParseMode: tele.ModeMarkdown},
 		)
 	}
@@ -304,65 +287,65 @@ func main() {
 
 	bot.Handle(&btnMyJournal, showJournal)
 
-	// --- Dynamic callback router (view / edit / delete) ---
-	// Handles buttons built at runtime with trade IDs embedded in callback data
+	// --- Dynamic callback router ---
 
 	bot.Handle(tele.OnCallback, func(c tele.Context) error {
 		data := strings.TrimPrefix(c.Callback().Data, "\f")
 		parts := strings.SplitN(data, ":", 2)
 		action := parts[0]
-		id := ""
+		idStr := ""
 		if len(parts) == 2 {
-			id = parts[1]
+			idStr = parts[1]
 		}
 
 		switch action {
 
 		case "view":
-			trades, _ := loadTrades(c.Sender().ID)
-			for _, t := range trades {
-				if t.ID == id {
-					menu := &tele.ReplyMarkup{}
-					editBtn := menu.Data("✏️ Edit", "edit:"+t.ID)
-					deleteBtn := menu.Data("🗑 Delete", "delete:"+t.ID)
-					backBtn := menu.Data("🔙 Journal", "back_journal")
-					menu.Inline(menu.Row(editBtn, deleteBtn), menu.Row(backBtn))
-					c.Respond()
-					return c.Send(
-						"📋 *Trade Detail*\n\n"+tradeDetail(t),
-						&tele.SendOptions{ParseMode: tele.ModeMarkdown, ReplyMarkup: menu},
-					)
-				}
+			idInt, _ := strconv.Atoi(idStr)
+			var t Trade
+			result := db.Where("id = ? AND user_id = ?", idInt, c.Sender().ID).First(&t)
+			if result.Error != nil {
+				return c.Respond(&tele.CallbackResponse{Text: "⚠️ Trade not found."})
 			}
-			return c.Respond(&tele.CallbackResponse{Text: "⚠️ Trade not found."})
+			menu := &tele.ReplyMarkup{}
+			editBtn   := menu.Data("✏️ Edit", "edit:"+idStr)
+			deleteBtn := menu.Data("🗑 Delete", "delete:"+idStr)
+			backBtn   := menu.Data("🔙 Journal", "back_journal")
+			menu.Inline(menu.Row(editBtn, deleteBtn), menu.Row(backBtn))
+			c.Respond()
+			return c.Send(
+				"📋 *Trade Detail*\n\n"+tradeDetail(t),
+				&tele.SendOptions{ParseMode: tele.ModeMarkdown, ReplyMarkup: menu},
+			)
 
 		case "edit":
-			trades, _ := loadTrades(c.Sender().ID)
-			for _, t := range trades {
-				if t.ID == id {
-					sess := getSession(c.Sender().ID)
-					sess.EditingID = t.ID
-					sess.Trade = t
-					sess.State = StateWaitingPair
-					c.Respond()
-					return c.Send(
-						fmt.Sprintf("✏️ *Edit Trade*\n\n📊 *Step 1/9 — Pair*\n\nCurrent: *%s*\n\nType new value or same:", t.Pair),
-						&tele.SendOptions{ParseMode: tele.ModeMarkdown},
-					)
-				}
+			idInt, _ := strconv.Atoi(idStr)
+			var t Trade
+			result := db.Where("id = ? AND user_id = ?", idInt, c.Sender().ID).First(&t)
+			if result.Error != nil {
+				return c.Respond(&tele.CallbackResponse{Text: "⚠️ Trade not found."})
 			}
-			return c.Respond(&tele.CallbackResponse{Text: "⚠️ Trade not found."})
+			sess := getSession(c.Sender().ID)
+			sess.EditingID = t.ID
+			sess.Trade = t
+			sess.State = StateWaitingPair
+			c.Respond()
+			return c.Send(
+				fmt.Sprintf("✏️ *Edit Trade*\n\n📊 *Step 1/9 — Pair*\n\nCurrent: *%s*\n\nType new value or same:", t.Pair),
+				&tele.SendOptions{ParseMode: tele.ModeMarkdown},
+			)
 
 		case "delete":
 			menu := &tele.ReplyMarkup{}
-			confirmBtn := menu.Data("✅ Yes, delete", "confirm_delete:"+id)
-			cancelBtn := menu.Data("❌ Cancel", "view:"+id)
+			confirmBtn := menu.Data("✅ Yes, delete", "confirm_delete:"+idStr)
+			cancelBtn  := menu.Data("❌ Cancel", "view:"+idStr)
 			menu.Inline(menu.Row(confirmBtn, cancelBtn))
 			c.Respond()
 			return c.Send("🗑 Are you sure you want to delete this trade?", &tele.SendOptions{ReplyMarkup: menu})
 
 		case "confirm_delete":
-			if err := deleteTrade(c.Sender().ID, id); err != nil {
+			idInt, _ := strconv.Atoi(idStr)
+			if err := deleteTrade(c.Sender().ID, uint(idInt)); err != nil {
 				return c.Respond(&tele.CallbackResponse{Text: "❌ Failed to delete."})
 			}
 			c.Respond()
@@ -425,7 +408,7 @@ func main() {
 			sess.Trade.Confirmation = text
 			sess.State = StateWaitingNotes
 			return c.Send(
-				"✅ Confirmation saved.\n\n📝 *Step 8/9 — Notes*\n\nAny additional notes?",
+				"✅ Confirmation saved.\n\n📝 *Step 9/9 — Notes*\n\nAny additional notes?",
 				&tele.SendOptions{ParseMode: tele.ModeMarkdown, ReplyMarkup: skipMenu},
 			)
 		case StateWaitingNotes:
