@@ -133,8 +133,8 @@ func main() {
 	mainMenu := &tele.ReplyMarkup{}
 	btnMyJournal := mainMenu.Data("📒 My Journal", "my_journal")
 	btnAddTrade := mainMenu.Data("➕ Add a Trade", "add_trade")
-	btnWeakness := mainMenu.Data("⚠️ My Weakness", "my_weakness")
-	btnAdvantage := mainMenu.Data("✅ My Advantage", "my_advantage")
+	btnAdvantage := mainMenu.Data("✅ My Advantage", "my_weakness")
+	btnWeakness := mainMenu.Data("⚠️ My Weakness", "my_advantage")
 	mainMenu.Inline(
 		mainMenu.Row(btnMyJournal, btnAddTrade),
 		mainMenu.Row(btnWeakness, btnAdvantage),
@@ -420,11 +420,11 @@ func main() {
 
 	// --- Placeholders ---
 
-	bot.Handle(&btnWeakness, func(c tele.Context) error {
+	bot.Handle(&btnAdvantage, func(c tele.Context) error {
 		c.Respond()
 		trades, err := loadTrades(c.Sender().ID)
 		if err != nil || len(trades) == 0 {
-			return c.Send("⚠️ *My Weakness*\n\nNo trades yet. Add some trades first!", &tele.SendOptions{ParseMode: tele.ModeMarkdown})
+			return c.Send("⚠️ *My advantage*\n\nNo trades yet. Add some trades first!", &tele.SendOptions{ParseMode: tele.ModeMarkdown})
 		}
 
 		// --- Count trades per symbol ---
@@ -500,7 +500,7 @@ func main() {
 		}
 
 		report := fmt.Sprintf(
-			"⚠️ *My Weakness Report*\n\n"+
+			"✅ *My advantage Report*\n\n"+
 				"📊 You trade *%s* the most (%d trades). Ask yourself: is this your strongest setup, or a habit?\n\n"+
 				"%s\n\n"+
 				"%s\n\n"+
@@ -513,8 +513,98 @@ func main() {
 
 		return c.Send(report, &tele.SendOptions{ParseMode: tele.ModeMarkdown, ReplyMarkup: mainMenu})
 	})
-	bot.Handle(&btnAdvantage, func(c tele.Context) error {
-		return c.Respond(&tele.CallbackResponse{Text: "✅ My Advantage — coming soon!"})
+	bot.Handle(&btnWeakness, func(c tele.Context) error {
+		c.Respond()
+		trades, err := loadTrades(c.Sender().ID)
+		if err != nil || len(trades) == 0 {
+			return c.Send("⚠️ *My Weakness*\n\nNo trades yet. Add some trades first!", &tele.SendOptions{ParseMode: tele.ModeMarkdown})
+		}
+
+		// --- Count per symbol ---
+		pairCount := make(map[string]int)
+		pairLosses := make(map[string]int)
+		buyTotal, buyLosses := 0, 0
+		sellTotal, sellLosses := 0, 0
+
+		for _, t := range trades {
+			pairCount[t.Pair]++
+			if t.Result == "Loss" {
+				pairLosses[t.Pair]++
+			}
+			if t.Direction == "Buy" {
+				buyTotal++
+				if t.Result == "Loss" {
+					buyLosses++
+				}
+			} else if t.Direction == "Sell" {
+				sellTotal++
+				if t.Result == "Loss" {
+					sellLosses++
+				}
+			}
+		}
+
+		// --- Least traded symbol ---
+		leastTradedPair := ""
+		leastTradedCount := int(^uint(0) >> 1) // max int
+		for pair, count := range pairCount {
+			if count < leastTradedCount {
+				leastTradedCount = count
+				leastTradedPair = pair
+			}
+		}
+
+		// --- Most losing symbol ---
+		mostLosingPair := ""
+		mostLosingCount := 0
+		for pair, losses := range pairLosses {
+			if losses > mostLosingCount {
+				mostLosingCount = losses
+				mostLosingPair = pair
+			}
+		}
+
+		// --- Buy vs Sell loss rate ---
+		buyLossRate := 0.0
+		sellLossRate := 0.0
+		if buyTotal > 0 {
+			buyLossRate = float64(buyLosses) / float64(buyTotal) * 100
+		}
+		if sellTotal > 0 {
+			sellLossRate = float64(sellLosses) / float64(sellTotal) * 100
+		}
+
+		directionLine := ""
+		switch {
+		case buyLossRate > sellLossRate:
+			directionLine = fmt.Sprintf("📈 Your *Buy* trades lose more often (%.0f%% loss rate vs %.0f%% on Sells). You may be forcing long setups.", buyLossRate, sellLossRate)
+		case sellLossRate > buyLossRate:
+			directionLine = fmt.Sprintf("📉 Your *Sell* trades lose more often (%.0f%% loss rate vs %.0f%% on Buys). You may be forcing short setups.", sellLossRate, buyLossRate)
+		default:
+			directionLine = fmt.Sprintf("⚖️ Your Buy and Sell loss rates are equal (%.0f%%). Losses are evenly spread across both directions.", buyLossRate)
+		}
+
+		losingLine := ""
+		if mostLosingPair == "" {
+			losingLine = "🎉 You have no losing trades yet. Keep it up!"
+		} else {
+			total := pairCount[mostLosingPair]
+			losingLine = fmt.Sprintf("❌ Your worst performing symbol is *%s* with %d loss(es) out of %d trade(s). Consider avoiding it or reviewing your edge.", mostLosingPair, mostLosingCount, total)
+		}
+
+		report := fmt.Sprintf(
+			"⚠️ *My Weakness Report*\n\n"+
+				"📊 You trade *%s* the least (%d trade(s)). This might be an unexplored opportunity — or a symbol you avoid for good reason.\n\n"+
+				"%s\n\n"+
+				"%s\n\n"+
+				"📝 Total trades analyzed: *%d*",
+			leastTradedPair, leastTradedCount,
+			losingLine,
+			directionLine,
+			len(trades),
+		)
+
+		return c.Send(report, &tele.SendOptions{ParseMode: tele.ModeMarkdown, ReplyMarkup: mainMenu})
 	})
 
 	log.Println("Trading Journal Bot is running...")
